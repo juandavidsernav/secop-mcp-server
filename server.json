@@ -1,0 +1,29 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.juandavidsernav/secop-mcp-server",
+  "description": "Consulta contratación pública de Colombia (SECOP I y II) desde datos.gov.co",
+  "repository": {
+    "url": "https://github.com/juandavidsernav/secop-mcp-server",
+    "source": "github"
+  },
+  "version": "0.2.2",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "secop-mcp-server",
+      "version": "0.2.2",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "description": "App Token de Socrata para datos.gov.co (opcional, aumenta rate limits)",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true,
+          "name": "SOCRATA_APP_TOKEN"
+        }
+      ]
+    }
+  ]
+}

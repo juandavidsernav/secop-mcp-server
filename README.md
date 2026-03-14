@@ -1,5 +1,7 @@
 # SECOP MCP Server
 
+<!-- mcp-name: io.github.juandavidsernav/secop-mcp-server -->
+
 Servidor [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) para consultar la contratación pública de Colombia a través de SECOP I y SECOP II.
 
 Los datos se obtienen en tiempo real desde [datos.gov.co](https://www.datos.gov.co/) (API SODA de Socrata) y son 100% públicos. No se almacena ningún dato localmente.
