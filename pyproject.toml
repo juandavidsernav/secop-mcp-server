@@ -1,6 +1,6 @@
 [project]
 name = "secop-mcp-server"
-version = "0.1.0"
+version = "0.2.0"
 description = "MCP Server para consultar contratación pública de Colombia (SECOP I y II)"
 readme = "README.md"
 license = { text = "MIT" }

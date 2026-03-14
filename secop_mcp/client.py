@@ -71,6 +71,7 @@ async def query_dataset(
     limit: int = 50,
     offset: int = 0,
     q: str | None = None,
+    group: str | None = None,
 ) -> list[dict[str, Any]]:
     """Ejecuta una consulta SoQL contra un dataset SECOP en datos.gov.co.
 
@@ -88,6 +89,8 @@ async def query_dataset(
         limit:       Máximo de filas a retornar (tope: 1000, impuesto por Socrata).
         offset:      Número de filas a saltar (para paginación).
         q:           Búsqueda full-text ($q de Socrata).
+        group:       Cláusula $group para agregaciones.
+                     Ejemplo: "nombre_entidad"
 
     Returns:
         Lista de diccionarios, donde cada diccionario es una fila del dataset.
@@ -109,6 +112,8 @@ async def query_dataset(
         params["$order"] = order
     if q:
         params["$q"] = q
+    if group:
+        params["$group"] = group
 
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         resp = await client.get(url, params=params, headers=_headers())
@@ -161,5 +166,56 @@ def format_results(rows: list[dict[str, Any]], max_rows: int = 20) -> str:
 
     if total > max_rows:
         lines.append(f"... y {total - max_rows} resultados más (usa 'offset' para paginar).")
+
+    return "\n".join(lines)
+
+
+def format_summary(rows: list[dict[str, Any]], max_rows: int = 50) -> str:
+    """Formatea resultados en vista resumida con solo campos clave.
+
+    Muestra una línea compacta por contrato con: entidad, proveedor,
+    objeto (truncado a 80 chars), valor, estado y fecha.
+    """
+    if not rows:
+        return "No se encontraron resultados."
+
+    total = len(rows)
+    display = rows[:max_rows]
+    lines: list[str] = [f"Resumen: {len(display)} de {total} resultados\n"]
+
+    for i, row in enumerate(display, 1):
+        entidad = row.get("nombre_entidad", "?")
+        proveedor = row.get("proveedor_adjudicado", "?")
+        doc = row.get("documento_proveedor", "")
+        objeto = row.get("objeto_del_contrato", "?")
+        if len(objeto) > 80:
+            objeto = objeto[:77] + "..."
+        valor = row.get("valor_del_contrato", "?")
+        pagado = row.get("valor_pagado", "0")
+        estado = row.get("estado_contrato", "?")
+        fecha = row.get("fecha_de_firma", "?")
+        if fecha and "T" in str(fecha):
+            fecha = str(fecha).split("T")[0]
+        modalidad = row.get("modalidad_de_contratacion", "?")
+
+        try:
+            valor_fmt = f"${float(valor):,.0f}"
+        except (ValueError, TypeError):
+            valor_fmt = str(valor)
+        try:
+            pagado_fmt = f"${float(pagado):,.0f}"
+        except (ValueError, TypeError):
+            pagado_fmt = str(pagado)
+
+        lines.append(
+            f"--- {i}. {proveedor} ({doc}) ---\n"
+            f"  Entidad: {entidad}\n"
+            f"  Objeto: {objeto}\n"
+            f"  Valor: {valor_fmt} | Pagado: {pagado_fmt} | Estado: {estado}\n"
+            f"  Fecha firma: {fecha} | Modalidad: {modalidad}"
+        )
+
+    if total > max_rows:
+        lines.append(f"\n... y {total - max_rows} resultados más.")
 
     return "\n".join(lines)

@@ -26,11 +26,13 @@ Este servidor permite que modelos de lenguaje como Claude consulten directamente
 
 | Tool | Descripción |
 |---|---|
-| `buscar_secop1` | Buscar procesos en SECOP I por entidad, contratista, objeto, departamento, etc. |
-| `buscar_procesos_secop2` | Buscar procesos de contratación en SECOP II |
-| `buscar_contratos_secop2` | Buscar contratos electrónicos en SECOP II |
+| `buscar_secop1` | Buscar procesos en SECOP I por entidad, contratista, objeto, departamento, rango de fechas, etc. |
+| `buscar_procesos_secop2` | Buscar procesos de contratación en SECOP II con filtros temporales |
+| `buscar_contratos_secop2` | Buscar contratos electrónicos en SECOP II con filtros temporales |
 | `buscar_proveedores` | Buscar proveedores registrados en SECOP II |
 | `buscar_por_persona` | Buscar en TODOS los datasets por cédula/NIT o nombre de una persona |
+| `resumen_contratacion` | Vista condensada de contratos (campos clave: entidad, proveedor, valor, estado, fecha) |
+| `agregaciones_contratacion` | Totales agrupados por proveedor, entidad, departamento o modalidad |
 | `consulta_libre` | Consulta SoQL avanzada sobre cualquier dataset |
 | `listar_datasets` | Ver todos los datasets y sus campos disponibles |
 
@@ -129,6 +131,10 @@ Una vez configurado, puedes pedirle a Claude cosas como:
 - "¿Cuáles son los contratos más grandes de SECOP II este año?"
 - "Busca todos los contratos asociados a la empresa XYZ"
 - "¿Cuánto ha contratado el municipio de Medellín en prestación de servicios?"
+- "Dame un resumen de los contratos de EPM en 2024"
+- "¿Cuáles son los proveedores con más contratos en Antioquia?"
+- "Agrupa por modalidad los contratos de la Alcaldía de Medellín"
+- "Muestra los contratos firmados entre enero y marzo de 2025 en el Valle del Cauca"
 
 ## Estructura del proyecto
 
@@ -171,10 +177,9 @@ Las contribuciones son bienvenidas:
 ### Ideas para contribuir
 
 - Agregar más datasets de datos.gov.co
-- Mejorar el formateo de resultados
-- Agregar filtros por rango de fechas
-- Crear visualizaciones o resúmenes automáticos
 - Traducciones del README
+- Alertas o monitoreo de nuevos contratos
+- Exportación a CSV/Excel
 
 ## Licencia
 
