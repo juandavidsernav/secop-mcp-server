@@ -161,13 +161,30 @@ def format_results(rows: list[dict[str, Any]], max_rows: int = 20) -> str:
         lines.append(f"--- Resultado {i} ---")
         for key, value in row.items():
             if value is not None and str(value).strip():
-                lines.append(f"  {key}: {value}")
+                if key in ("urlproceso", "ruta_proceso_en_secop_i"):
+                    url = _extract_url(value)
+                    if url:
+                        lines.append(f"  {key}: {url}")
+                else:
+                    lines.append(f"  {key}: {value}")
         lines.append("")
 
     if total > max_rows:
         lines.append(f"... y {total - max_rows} resultados más (usa 'offset' para paginar).")
 
     return "\n".join(lines)
+
+
+def _extract_url(value: Any) -> str:
+    """Extrae la URL de un campo urlproceso de Socrata.
+
+    El campo puede venir como dict {'url': '...'}, como string, o None.
+    """
+    if not value:
+        return ""
+    if isinstance(value, dict):
+        return value.get("url", "")
+    return str(value)
 
 
 def format_summary(rows: list[dict[str, Any]], max_rows: int = 50) -> str:
@@ -207,13 +224,17 @@ def format_summary(rows: list[dict[str, Any]], max_rows: int = 50) -> str:
         except (ValueError, TypeError):
             pagado_fmt = str(pagado)
 
-        lines.append(
+        url = _extract_url(row.get("urlproceso"))
+        entry = (
             f"--- {i}. {proveedor} ({doc}) ---\n"
             f"  Entidad: {entidad}\n"
             f"  Objeto: {objeto}\n"
             f"  Valor: {valor_fmt} | Pagado: {pagado_fmt} | Estado: {estado}\n"
             f"  Fecha firma: {fecha} | Modalidad: {modalidad}"
         )
+        if url:
+            entry += f"\n  URL: {url}"
+        lines.append(entry)
 
     if total > max_rows:
         lines.append(f"\n... y {total - max_rows} resultados más.")

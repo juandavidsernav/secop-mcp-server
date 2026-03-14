@@ -457,7 +457,8 @@ async def resumen_contratacion(
         select=(
             "nombre_entidad, proveedor_adjudicado, documento_proveedor, "
             "objeto_del_contrato, valor_del_contrato, valor_pagado, "
-            "estado_contrato, fecha_de_firma, departamento, modalidad_de_contratacion"
+            "estado_contrato, fecha_de_firma, departamento, "
+            "modalidad_de_contratacion, urlproceso"
         ),
         limit=min(limite, 200),
         order="valor_del_contrato DESC",
