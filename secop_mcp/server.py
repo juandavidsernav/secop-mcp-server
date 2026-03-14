@@ -1,4 +1,31 @@
-"""Servidor MCP para consultas de contratación pública colombiana (SECOP I y II)."""
+"""
+Servidor MCP para consultas de contratación pública colombiana (SECOP I y II).
+
+Este módulo define el servidor MCP (Model Context Protocol) y todas las
+herramientas (tools) que expone a los modelos de lenguaje. Cada herramienta
+corresponde a un tipo de consulta específico sobre los datos de contratación
+pública del Estado colombiano.
+
+Herramientas disponibles:
+    - buscar_secop1:          Búsqueda en procesos históricos de SECOP I.
+    - buscar_procesos_secop2: Búsqueda de procesos de contratación en SECOP II.
+    - buscar_contratos_secop2: Búsqueda de contratos electrónicos en SECOP II.
+    - buscar_proveedores:     Búsqueda de proveedores registrados en SECOP II.
+    - buscar_por_persona:     Búsqueda cruzada en TODOS los datasets por persona/empresa.
+    - consulta_libre:         Consulta SoQL avanzada sobre cualquier dataset.
+    - listar_datasets:        Lista los datasets disponibles y sus campos.
+
+Arquitectura:
+    El servidor usa FastMCP (del SDK oficial de MCP) en modo stdio, lo que
+    permite que Claude Desktop y Claude Code se comuniquen con él a través
+    de entrada/salida estándar.
+
+    Flujo de una consulta:
+    1. El LLM invoca una herramienta (ej: buscar_contratos_secop2).
+    2. La herramienta construye filtros SoQL con _build_where().
+    3. Se ejecuta la consulta HTTP a datos.gov.co vía client.query_dataset().
+    4. Los resultados se formatean con client.format_results() y se retornan al LLM.
+"""
 
 from __future__ import annotations
 
@@ -11,6 +38,9 @@ from mcp.server.fastmcp import FastMCP
 from .client import format_results, query_dataset
 from .datasets import DATASETS
 
+# Instancia del servidor MCP.
+# El nombre "secop-colombia" es el identificador que los clientes MCP
+# (como Claude Desktop) usan para referirse a este servidor.
 mcp = FastMCP(
     "secop-colombia",
     instructions=(
@@ -25,8 +55,31 @@ mcp = FastMCP(
 # Helpers para construir cláusulas WHERE
 # ---------------------------------------------------------------------------
 
+
 def _build_where(filters: dict[str, str | float | None]) -> str | None:
-    """Construye una cláusula $where SoQL a partir de filtros no nulos."""
+    """Construye una cláusula $where SoQL a partir de un diccionario de filtros.
+
+    Recorre los filtros proporcionados e ignora los que son None o cadenas
+    vacías. Para cada filtro válido:
+      - Si el valor es numérico, genera una comparación "campo >= valor".
+      - Si el valor es texto, genera una búsqueda parcial insensible a
+        mayúsculas: "upper(campo) like upper('%valor%')".
+
+    Los valores de texto se escapan (comillas simples) para prevenir
+    inyección SoQL.
+
+    Args:
+        filters: Diccionario donde las claves son nombres de columnas del
+                 dataset y los valores son los criterios de búsqueda.
+                 Los valores None o vacíos se ignoran.
+
+    Returns:
+        Cláusula $where combinada con AND, o None si no hay filtros activos.
+
+    Ejemplo:
+        >>> _build_where({"nombre_entidad": "Bogotá", "valor_del_contrato": 1000000})
+        "upper(nombre_entidad) like upper('%Bogotá%') AND valor_del_contrato >= 1000000"
+    """
     clauses: list[str] = []
     for field, value in filters.items():
         if value is None or (isinstance(value, str) and not value.strip()):
@@ -34,14 +87,16 @@ def _build_where(filters: dict[str, str | float | None]) -> str | None:
         if isinstance(value, (int, float)):
             clauses.append(f"{field} >= {value}")
         else:
+            # Escapar comillas simples para prevenir inyección SoQL
             safe = value.replace("'", "''")
             clauses.append(f"upper({field}) like upper('%{safe}%')")
     return " AND ".join(clauses) if clauses else None
 
 
 # ---------------------------------------------------------------------------
-# Tools
+# Tools - Herramientas MCP expuestas al LLM
 # ---------------------------------------------------------------------------
+
 
 @mcp.tool()
 async def buscar_secop1(
@@ -60,8 +115,12 @@ async def buscar_secop1(
 ) -> str:
     """Busca procesos de compra pública en SECOP I (datos históricos).
 
-    Permite filtrar por entidad, contratista, objeto, departamento, modalidad,
-    estado, cuantía mínima. Los filtros son combinables (AND).
+    SECOP I es el sistema de contratación anterior a SECOP II. Contiene
+    registros históricos de procesos de compra pública. Todos los filtros
+    son opcionales y combinables entre sí (operador AND).
+
+    Útil para buscar contratos anteriores a ~2020 o entidades que aún
+    publican en SECOP I.
     """
     where = _build_where({
         "nombre_entidad": entidad,
@@ -99,7 +158,12 @@ async def buscar_procesos_secop2(
     limite: Annotated[int, "Máximo de resultados (1-200)"] = 50,
     offset: Annotated[int, "Saltar N resultados (paginación)"] = 0,
 ) -> str:
-    """Busca procesos de contratación en SECOP II (plataforma transaccional)."""
+    """Busca procesos de contratación en SECOP II (plataforma transaccional).
+
+    SECOP II es la plataforma vigente de contratación pública electrónica.
+    Los procesos incluyen información sobre la entidad contratante, el
+    proveedor seleccionado, valores y estado del procedimiento.
+    """
     where = _build_where({
         "entidad": entidad,
         "nombre_del_proveedor": proveedor,
@@ -136,7 +200,9 @@ async def buscar_contratos_secop2(
 ) -> str:
     """Busca contratos electrónicos en SECOP II.
 
-    Incluye valores pagados, facturados y pendientes de pago.
+    Los contratos electrónicos contienen información detallada incluyendo
+    valores pagados, facturados y pendientes de pago. Es el dataset más
+    completo para analizar la ejecución financiera de la contratación.
     """
     where = _build_where({
         "nombre_entidad": entidad,
@@ -167,7 +233,11 @@ async def buscar_proveedores(
     limite: Annotated[int, "Máximo de resultados (1-200)"] = 50,
     offset: Annotated[int, "Saltar N resultados (paginación)"] = 0,
 ) -> str:
-    """Busca proveedores registrados en SECOP II."""
+    """Busca proveedores registrados en SECOP II.
+
+    Permite identificar proveedores por nombre, NIT o ubicación geográfica.
+    Útil para verificar el registro de un proveedor en la plataforma.
+    """
     where = _build_where({
         "nombre_proveedor": nombre,
         "nit_proveedor": nit if nit else None,
@@ -198,8 +268,15 @@ async def consulta_libre(
 ) -> str:
     """Consulta libre con SoQL sobre cualquier dataset SECOP.
 
-    Para consultas avanzadas que los otros tools no cubren.
-    Usa sintaxis SoQL: https://dev.socrata.com/docs/queries/
+    Para consultas avanzadas que las otras herramientas no cubren.
+    Permite escribir cláusulas SoQL directamente, similar a SQL.
+
+    Documentación SoQL: https://dev.socrata.com/docs/queries/
+
+    Ejemplos de cláusulas $where:
+        - "valor_del_contrato > 1000000000"
+        - "departamento = 'Antioquia' AND estado_contrato = 'En ejecución'"
+        - "fecha_de_firma > '2024-01-01'"
     """
     if dataset not in DATASETS:
         return f"Dataset no válido. Opciones: {', '.join(DATASETS.keys())}"
@@ -226,12 +303,18 @@ async def buscar_por_persona(
     Útil para encontrar todos los contratos, procesos y registros asociados
     a un contratista o proveedor específico. Busca simultáneamente en SECOP I,
     SECOP II Procesos, SECOP II Contratos y SECOP II Proveedores.
+
+    Esta es la herramienta más completa para investigar el historial de
+    contratación de una persona natural o jurídica con el Estado colombiano.
     """
     if not documento and not nombre:
         return "Debes proporcionar al menos un documento o un nombre para buscar."
 
     import asyncio
 
+    # Mapeo de campos de búsqueda por dataset.
+    # Cada dataset usa nombres de columna diferentes para referirse al
+    # documento y nombre del contratista/proveedor.
     searches: dict[str, dict[str, str | float | None]] = {
         "secop1_procesos": {
             "identificacion_del_contratista": documento if documento else None,
@@ -254,6 +337,7 @@ async def buscar_por_persona(
     cap = min(limite, 100)
 
     async def _search(ds_key: str, filters: dict) -> tuple[str, list]:
+        """Ejecuta la búsqueda en un dataset individual."""
         try:
             where = _build_where(filters)
             rows = await query_dataset(ds_key, where=where, limit=cap)
@@ -261,9 +345,11 @@ async def buscar_por_persona(
         except Exception:
             return ds_key, []
 
+    # Ejecutar todas las búsquedas en paralelo para minimizar latencia.
     tasks = [_search(k, v) for k, v in searches.items()]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
+    # Consolidar resultados de todos los datasets.
     sections: list[str] = []
     total_found = 0
     for result in results:
@@ -286,7 +372,12 @@ async def buscar_por_persona(
 
 @mcp.tool()
 async def listar_datasets() -> str:
-    """Lista todos los datasets SECOP disponibles con sus campos de búsqueda."""
+    """Lista todos los datasets SECOP disponibles con sus campos de búsqueda.
+
+    Útil para conocer qué datasets se pueden consultar y qué campos están
+    disponibles para filtrar en cada uno. Esta información es necesaria
+    para usar la herramienta consulta_libre().
+    """
     lines: list[str] = []
     for key, ds in DATASETS.items():
         lines.append(f"## {ds['nombre']}")
@@ -302,7 +393,14 @@ async def listar_datasets() -> str:
 # Entrypoint
 # ---------------------------------------------------------------------------
 
+
 def main():
+    """Punto de entrada principal del servidor MCP.
+
+    Inicia el servidor en modo stdio (entrada/salida estándar), que es el
+    transporte estándar para la comunicación entre clientes MCP (como
+    Claude Desktop o Claude Code) y servidores MCP.
+    """
     mcp.run(transport="stdio")
 
 

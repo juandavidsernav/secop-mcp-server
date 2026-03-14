@@ -29,4 +29,5 @@ build-backend = "hatchling.build"
 packages = ["secop_mcp"]
 
 [project.urls]
-Repository = "https://github.com/juserna/secop-mcp-server"
+Repository = "https://github.com/juandavidsernav/secop-mcp-server"
+Issues = "https://github.com/juandavidsernav/secop-mcp-server/issues"
