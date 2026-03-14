@@ -84,7 +84,7 @@ DATASETS: dict[str, dict] = {
             "nit_del_proveedor_adjudicado",
             "nombre_del_procedimiento",
             "descripci_n_del_procedimiento",
-            "objeto_a_contratar",
+            "descripci_n_del_procedimiento",
             "precio_base",
             "valor_total_adjudicacion",
             "fecha_de_publicacion_del",

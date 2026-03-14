@@ -25,6 +25,8 @@ Referencias:
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import os
 from typing import Any
 
@@ -32,9 +34,16 @@ import httpx
 
 from .datasets import get_endpoint
 
+logger = logging.getLogger(__name__)
+
 # Timeout en segundos para las peticiones HTTP a la API de Socrata.
 # Los datasets SECOP pueden ser grandes, así que se usa un valor generoso.
-_TIMEOUT = 30.0
+_TIMEOUT = 45.0
+
+# Configuración de reintentos.
+_MAX_RETRIES = 3
+_RETRY_BASE_DELAY = 1.0  # segundos, se multiplica exponencialmente
+_RETRYABLE_STATUS_CODES = {408, 429, 500, 502, 503, 504}
 
 
 def _app_token() -> str | None:
@@ -115,10 +124,37 @@ async def query_dataset(
     if group:
         params["$group"] = group
 
+    last_exception: Exception | None = None
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-        resp = await client.get(url, params=params, headers=_headers())
-        resp.raise_for_status()
-        return resp.json()
+        for attempt in range(_MAX_RETRIES):
+            try:
+                resp = await client.get(url, params=params, headers=_headers())
+                if resp.status_code in _RETRYABLE_STATUS_CODES:
+                    delay = _RETRY_BASE_DELAY * (2 ** attempt)
+                    logger.warning(
+                        "Socrata retornó %s, reintentando en %.1fs (intento %d/%d)",
+                        resp.status_code, delay, attempt + 1, _MAX_RETRIES,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                resp.raise_for_status()
+                return resp.json()
+            except httpx.TimeoutException as exc:
+                last_exception = exc
+                delay = _RETRY_BASE_DELAY * (2 ** attempt)
+                logger.warning(
+                    "Timeout en consulta a Socrata, reintentando en %.1fs (intento %d/%d)",
+                    delay, attempt + 1, _MAX_RETRIES,
+                )
+                await asyncio.sleep(delay)
+            except httpx.HTTPStatusError:
+                raise
+
+    # Si agotamos reintentos, lanzar el último error o el status de la última respuesta
+    if last_exception:
+        raise last_exception
+    resp.raise_for_status()
+    return resp.json()
 
 
 def format_results(rows: list[dict[str, Any]], max_rows: int = 20) -> str:

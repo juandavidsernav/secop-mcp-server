@@ -236,7 +236,7 @@ async def buscar_procesos_secop2(
             "entidad": entidad,
             "nombre_del_proveedor": proveedor,
             "nit_del_proveedor_adjudicado": nit_proveedor if nit_proveedor else None,
-            "objeto_a_contratar": objeto,
+            "descripci_n_del_procedimiento": objeto,
             "nombre_del_procedimiento": nombre_procedimiento,
             "departamento": departamento,
             "modalidad_de_contratacion": modalidad,
@@ -574,6 +574,92 @@ async def agregaciones_contratacion(
         lines.append(
             f"{i}. {name}\n"
             f"   Contratos: {n_contracts} | Valor total: {total_fmt} | Pagado: {paid_fmt}"
+        )
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def contar_personas_contratadas(
+    entidad: Annotated[str, "Nombre de la entidad contratante"],
+    anios: Annotated[
+        list[int],
+        "Lista de años a consultar (ej: [2024, 2025, 2026])",
+    ],
+    solo_personas_naturales: Annotated[
+        bool,
+        "Si es True, solo cuenta personas naturales (cédulas). Si es False, incluye también empresas (NIT).",
+    ] = True,
+) -> str:
+    """Cuenta personas contratadas y valores por año para una entidad.
+
+    Ideal para KPIs de contratación. Retorna por cada año:
+    - Personas/proveedores únicos contratados
+    - Total de contratos
+    - Valor total contratado
+    - Valor pagado
+
+    Distingue entre personas naturales (Cédula de Ciudadanía,
+    Cédula de Extranjería) y personas jurídicas (NIT).
+    """
+    import asyncio
+
+    tipos_persona = (
+        "tipodocproveedor = 'Cédula de Ciudadanía' "
+        "OR tipodocproveedor = 'Cédula de Extranjería'"
+    )
+
+    async def _query_year(year: int) -> dict:
+        where_parts = [
+            f"upper(nombre_entidad) like upper('%{entidad.replace(chr(39), chr(39)*2)}%')",
+            f"fecha_de_firma >= '{year}-01-01T00:00:00.000'",
+            f"fecha_de_firma <= '{year}-12-31T23:59:59.999'",
+        ]
+        if solo_personas_naturales:
+            where_parts.append(f"({tipos_persona})")
+
+        where = " AND ".join(where_parts)
+
+        rows = await query_dataset(
+            "secop2_contratos",
+            where=where,
+            select=(
+                "count(*) as total_contratos, "
+                "count(distinct documento_proveedor) as personas_unicas, "
+                "sum(valor_del_contrato) as valor_total, "
+                "sum(valor_pagado) as valor_pagado"
+            ),
+            limit=1,
+        )
+        r = rows[0] if rows else {}
+        return {
+            "anio": year,
+            "personas_unicas": int(r.get("personas_unicas", 0)),
+            "total_contratos": int(r.get("total_contratos", 0)),
+            "valor_total": float(r.get("valor_total", 0)),
+            "valor_pagado": float(r.get("valor_pagado", 0)),
+        }
+
+    results = await asyncio.gather(*[_query_year(y) for y in sorted(anios)])
+
+    tipo_label = "personas naturales" if solo_personas_naturales else "todos los proveedores"
+    lines: list[str] = [
+        f"Personas contratadas por {entidad} ({tipo_label})\n"
+    ]
+    for r in results:
+        try:
+            total_fmt = f"${r['valor_total']:,.0f}"
+            pagado_fmt = f"${r['valor_pagado']:,.0f}"
+        except (ValueError, TypeError):
+            total_fmt = str(r["valor_total"])
+            pagado_fmt = str(r["valor_pagado"])
+
+        lines.append(
+            f"--- {r['anio']} ---\n"
+            f"  Personas únicas: {r['personas_unicas']}\n"
+            f"  Total contratos: {r['total_contratos']}\n"
+            f"  Valor contratado: {total_fmt}\n"
+            f"  Valor pagado: {pagado_fmt}"
         )
 
     return "\n".join(lines)
