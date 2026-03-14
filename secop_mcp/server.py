@@ -6,15 +6,15 @@ herramientas (tools) que expone a los modelos de lenguaje. Cada herramienta
 corresponde a un tipo de consulta específico sobre los datos de contratación
 pública del Estado colombiano.
 
-Herramientas disponibles:
-    - buscar_secop1:            Búsqueda en procesos históricos de SECOP I.
-    - buscar_procesos_secop2:   Búsqueda de procesos de contratación en SECOP II.
-    - buscar_contratos_secop2:  Búsqueda de contratos electrónicos en SECOP II.
+Herramientas disponibles (en orden de prioridad de uso):
+    - buscar_por_persona:       Búsqueda cruzada en TODOS los datasets por NIT/cédula o nombre. USAR PRIMERO si se tiene documento.
+    - buscar_procesos_secop2:   Búsqueda de procesos de contratación en SECOP II (vigente).
+    - buscar_contratos_secop2:  Búsqueda de contratos electrónicos en SECOP II (vigente).
     - buscar_proveedores:       Búsqueda de proveedores registrados en SECOP II.
-    - buscar_por_persona:       Búsqueda cruzada en TODOS los datasets por persona/empresa.
     - resumen_contratacion:     Vista condensada de contratos (campos clave).
     - agregaciones_contratacion: Totales agrupados por proveedor, entidad, etc.
     - consulta_libre:           Consulta SoQL avanzada sobre cualquier dataset.
+    - buscar_secop1:            Búsqueda en SECOP I (histórico, solo si SECOP II no tiene resultados).
     - listar_datasets:          Lista los datasets disponibles y sus campos.
 
 Arquitectura:
@@ -48,7 +48,19 @@ mcp = FastMCP(
     instructions=(
         "Servidor para consultar datos de contratación pública de Colombia "
         "(SECOP I y SECOP II). Los datos provienen de datos.gov.co. "
-        "Usa las herramientas disponibles para buscar contratos, procesos y proveedores."
+        "Usa las herramientas disponibles para buscar contratos, procesos y proveedores.\n\n"
+        "ESTRATEGIA DE BÚSQUEDA (seguir este orden):\n"
+        "1. Si tienes el NIT o cédula del contratista/empresa: usa buscar_por_persona(documento=...) PRIMERO. "
+        "Es la forma más confiable y rápida.\n"
+        "2. Si conoces la entidad y palabras clave del objeto: usa buscar_procesos_secop2 o "
+        "buscar_contratos_secop2 con los parámetros estructurados (entidad=, objeto=).\n"
+        "3. Si la búsqueda estructurada no funciona: agrega busqueda_texto= para búsqueda full-text.\n"
+        "4. SECOP II es la plataforma vigente. Busca SIEMPRE primero en SECOP II. "
+        "Solo busca en SECOP I (buscar_secop1) si no encuentras resultados en SECOP II "
+        "o si el contrato es anterior a ~2020.\n"
+        "5. Pide al usuario el NIT o número de documento si las búsquedas por nombre no arrojan resultados.\n"
+        "6. Los nombres de entidades en SECOP pueden diferir del nombre coloquial "
+        "(ej: 'RTVC' aparece como 'RADIO TELEVISION NACIONAL DE COLOMBIA.')."
     ),
 )
 
@@ -151,17 +163,18 @@ async def buscar_secop1(
     cuantia_minima: Annotated[float | None, "Cuantía mínima del contrato"] = None,
     fecha_desde: Annotated[str, "Fecha inicio rango (YYYY-MM-DD). Filtra por fecha de firma."] = "",
     fecha_hasta: Annotated[str, "Fecha fin rango (YYYY-MM-DD). Filtra por fecha de firma."] = "",
+    busqueda_texto: Annotated[str, "Búsqueda full-text adicional ($q de Socrata). Útil cuando los filtros estructurados no encuentran resultados."] = "",
     limite: Annotated[int, "Máximo de resultados (1-200)"] = 50,
     offset: Annotated[int, "Saltar N resultados (paginación)"] = 0,
 ) -> str:
     """Busca procesos de compra pública en SECOP I (datos históricos).
 
-    SECOP I es el sistema de contratación anterior a SECOP II. Contiene
-    registros históricos de procesos de compra pública. Todos los filtros
-    son opcionales y combinables entre sí (operador AND).
+    IMPORTANTE: SECOP I es el sistema ANTERIOR, ya NO se usa. Busca primero
+    en SECOP II (buscar_procesos_secop2 o buscar_contratos_secop2).
+    Solo usa esta herramienta si no encontraste resultados en SECOP II
+    o si el contrato es anterior a ~2020.
 
-    Útil para buscar contratos anteriores a ~2020 o entidades que aún
-    publican en SECOP I.
+    Todos los filtros son opcionales y combinables entre sí (operador AND).
     """
     where = _combine_where(
         {
@@ -181,6 +194,7 @@ async def buscar_secop1(
     rows = await query_dataset(
         "secop1_procesos",
         where=where,
+        q=busqueda_texto or None,
         limit=min(limite, 200),
         offset=offset,
         order="cuantia_contrato DESC",
@@ -194,6 +208,7 @@ async def buscar_procesos_secop2(
     proveedor: Annotated[str, "Nombre del proveedor adjudicado"] = "",
     nit_proveedor: Annotated[str, "NIT o documento del proveedor adjudicado"] = "",
     objeto: Annotated[str, "Palabras clave del objeto a contratar"] = "",
+    nombre_procedimiento: Annotated[str, "Palabras clave del nombre/título del procedimiento"] = "",
     departamento: Annotated[str, "Departamento"] = "",
     modalidad: Annotated[str, "Modalidad de contratación"] = "",
     fase: Annotated[str, "Fase del proceso (ej: 'Seleccion', 'Contrato')"] = "",
@@ -201,14 +216,20 @@ async def buscar_procesos_secop2(
     valor_minimo: Annotated[float | None, "Valor mínimo de adjudicación"] = None,
     fecha_desde: Annotated[str, "Fecha inicio rango (YYYY-MM-DD). Filtra por fecha de publicación."] = "",
     fecha_hasta: Annotated[str, "Fecha fin rango (YYYY-MM-DD). Filtra por fecha de publicación."] = "",
+    busqueda_texto: Annotated[str, "Búsqueda full-text adicional ($q de Socrata). Útil cuando los filtros estructurados no encuentran resultados."] = "",
     limite: Annotated[int, "Máximo de resultados (1-200)"] = 50,
     offset: Annotated[int, "Saltar N resultados (paginación)"] = 0,
 ) -> str:
-    """Busca procesos de contratación en SECOP II (plataforma transaccional).
+    """Busca procesos de contratación en SECOP II (plataforma vigente).
 
-    SECOP II es la plataforma vigente de contratación pública electrónica.
+    SECOP II es la plataforma VIGENTE de contratación pública electrónica.
+    Busca aquí PRIMERO antes de buscar en SECOP I.
+
     Los procesos incluyen información sobre la entidad contratante, el
     proveedor seleccionado, valores y estado del procedimiento.
+
+    Tip: El campo nombre_procedimiento busca en el título del proceso,
+    que a menudo contiene el nombre del proyecto o descripción corta.
     """
     where = _combine_where(
         {
@@ -216,6 +237,7 @@ async def buscar_procesos_secop2(
             "nombre_del_proveedor": proveedor,
             "nit_del_proveedor_adjudicado": nit_proveedor if nit_proveedor else None,
             "objeto_a_contratar": objeto,
+            "nombre_del_procedimiento": nombre_procedimiento,
             "departamento": departamento,
             "modalidad_de_contratacion": modalidad,
             "fase": fase,
@@ -227,6 +249,7 @@ async def buscar_procesos_secop2(
     rows = await query_dataset(
         "secop2_procesos",
         where=where,
+        q=busqueda_texto or None,
         limit=min(limite, 200),
         offset=offset,
         order="valor_total_adjudicacion DESC",
@@ -246,14 +269,18 @@ async def buscar_contratos_secop2(
     valor_minimo: Annotated[float | None, "Valor mínimo del contrato"] = None,
     fecha_desde: Annotated[str, "Fecha inicio rango (YYYY-MM-DD). Filtra por fecha de firma."] = "",
     fecha_hasta: Annotated[str, "Fecha fin rango (YYYY-MM-DD). Filtra por fecha de firma."] = "",
+    busqueda_texto: Annotated[str, "Búsqueda full-text adicional ($q de Socrata). Útil cuando los filtros estructurados no encuentran resultados."] = "",
     limite: Annotated[int, "Máximo de resultados (1-200)"] = 50,
     offset: Annotated[int, "Saltar N resultados (paginación)"] = 0,
 ) -> str:
-    """Busca contratos electrónicos en SECOP II.
+    """Busca contratos electrónicos en SECOP II (plataforma vigente).
 
     Los contratos electrónicos contienen información detallada incluyendo
     valores pagados, facturados y pendientes de pago. Es el dataset más
     completo para analizar la ejecución financiera de la contratación.
+
+    Busca aquí PRIMERO antes de buscar en SECOP I.
+    Si conoces el NIT del proveedor, usa nit_proveedor para búsqueda exacta.
     """
     where = _combine_where(
         {
@@ -271,6 +298,7 @@ async def buscar_contratos_secop2(
     rows = await query_dataset(
         "secop2_contratos",
         where=where,
+        q=busqueda_texto or None,
         limit=min(limite, 200),
         offset=offset,
         order="valor_del_contrato DESC",
@@ -355,8 +383,11 @@ async def buscar_por_persona(
     """Busca en TODOS los datasets de SECOP por número de documento o nombre de una persona/empresa.
 
     Útil para encontrar todos los contratos, procesos y registros asociados
-    a un contratista o proveedor específico. Busca simultáneamente en SECOP I,
-    SECOP II Procesos, SECOP II Contratos y SECOP II Proveedores.
+    a un contratista o proveedor específico. Busca simultáneamente en
+    SECOP II Procesos, SECOP II Contratos, SECOP II Proveedores y SECOP I.
+
+    IMPORTANTE: Si tienes el NIT o cédula, úsalo en el parámetro 'documento'.
+    Es mucho más confiable que buscar por nombre.
 
     Esta es la herramienta más completa para investigar el historial de
     contratación de una persona natural o jurídica con el Estado colombiano.
@@ -369,11 +400,8 @@ async def buscar_por_persona(
     # Mapeo de campos de búsqueda por dataset.
     # Cada dataset usa nombres de columna diferentes para referirse al
     # documento y nombre del contratista/proveedor.
+    # ORDEN: SECOP II primero (plataforma vigente), luego SECOP I (histórico).
     searches: dict[str, dict[str, str | float | None]] = {
-        "secop1_procesos": {
-            "identificacion_del_contratista": documento if documento else None,
-            "nom_razon_social_contratista": nombre if nombre else None,
-        },
         "secop2_procesos": {
             "nit_del_proveedor_adjudicado": documento if documento else None,
             "nombre_del_proveedor": nombre if nombre else None,
@@ -385,6 +413,10 @@ async def buscar_por_persona(
         "secop2_proveedores": {
             "nit_proveedor": documento if documento else None,
             "nombre_proveedor": nombre if nombre else None,
+        },
+        "secop1_procesos": {
+            "identificacion_del_contratista": documento if documento else None,
+            "nom_razon_social_contratista": nombre if nombre else None,
         },
     }
 
