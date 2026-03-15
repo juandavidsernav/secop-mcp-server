@@ -374,11 +374,41 @@ async def consulta_libre(
     return format_results(rows)
 
 
+_PERSON_SUMMARY_FIELDS: dict[str, list[str]] = {
+    "secop2_procesos": [
+        "entidad", "nombre_del_proveedor", "nit_del_proveedor_adjudicado",
+        "descripci_n_del_procedimiento", "precio_base",
+        "estado_del_procedimiento", "fecha_de_publicacion_del", "urlproceso",
+    ],
+    "secop2_contratos": [
+        "nombre_entidad", "proveedor_adjudicado", "documento_proveedor",
+        "objeto_del_contrato", "valor_del_contrato", "valor_pagado",
+        "estado_contrato", "fecha_de_firma", "urlproceso",
+    ],
+    "secop2_proveedores": [
+        "nombre_proveedor", "nit_proveedor", "departamento", "ciudad",
+    ],
+    "secop1_procesos": [
+        "nombre_entidad", "nom_razon_social_contratista",
+        "identificacion_del_contratista", "detalle_del_objeto_a_contratar",
+        "cuantia_contrato", "estado_del_proceso", "fecha_de_firma_del_contrato",
+        "ruta_proceso_en_secop_i",
+    ],
+}
+
+_SUMMARY_THRESHOLD = 10
+
+
 @mcp.tool()
 async def buscar_por_persona(
     documento: Annotated[str, "Número de documento (cédula, NIT, etc.)"] = "",
     nombre: Annotated[str, "Nombre o razón social de la persona/empresa"] = "",
     limite: Annotated[int, "Máximo de resultados por dataset (1-100)"] = 20,
+    detalle: Annotated[
+        str,
+        "Nivel de detalle: 'auto' (resumen si hay muchos resultados), "
+        "'completo' (todos los campos), 'resumen' (siempre compacto)",
+    ] = "auto",
 ) -> str:
     """Busca en TODOS los datasets de SECOP por número de documento o nombre de una persona/empresa.
 
@@ -397,10 +427,6 @@ async def buscar_por_persona(
 
     import asyncio
 
-    # Mapeo de campos de búsqueda por dataset.
-    # Cada dataset usa nombres de columna diferentes para referirse al
-    # documento y nombre del contratista/proveedor.
-    # ORDEN: SECOP II primero (plataforma vigente), luego SECOP I (histórico).
     searches: dict[str, dict[str, str | float | None]] = {
         "secop2_procesos": {
             "nit_del_proveedor_adjudicado": documento if documento else None,
@@ -421,39 +447,65 @@ async def buscar_por_persona(
     }
 
     cap = min(limite, 100)
+    force_summary = detalle == "resumen"
 
     async def _search(ds_key: str, filters: dict) -> tuple[str, list]:
         """Ejecuta la búsqueda en un dataset individual."""
         try:
             where = _build_where(filters)
-            rows = await query_dataset(ds_key, where=where, limit=cap)
+            select_clause = None
+            if force_summary:
+                select_clause = ", ".join(_PERSON_SUMMARY_FIELDS[ds_key])
+            rows = await query_dataset(
+                ds_key, where=where, limit=cap, select=select_clause,
+            )
             return ds_key, rows
         except Exception:
             return ds_key, []
 
-    # Ejecutar todas las búsquedas en paralelo para minimizar latencia.
     tasks = [_search(k, v) for k, v in searches.items()]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    # Consolidar resultados de todos los datasets.
-    sections: list[str] = []
+    # Consolidar resultados y determinar modo de visualización.
+    collected: list[tuple[str, list]] = []
     total_found = 0
     for result in results:
         if isinstance(result, Exception):
             continue
         ds_key, rows = result
-        ds_name = DATASETS[ds_key]["nombre"]
         if rows:
             total_found += len(rows)
-            sections.append(f"## {ds_name} ({len(rows)} resultados)\n")
-            sections.append(format_results(rows))
-            sections.append("")
+            collected.append((ds_key, rows))
 
-    if not sections:
+    if not collected:
         return "No se encontraron resultados en ningún dataset de SECOP."
 
+    use_summary = (
+        detalle == "resumen"
+        or (detalle == "auto" and total_found > _SUMMARY_THRESHOLD)
+    )
+
+    sections: list[str] = []
+    for ds_key, rows in collected:
+        ds_name = DATASETS[ds_key]["nombre"]
+        sections.append(f"## {ds_name} ({len(rows)} resultados)\n")
+        if use_summary:
+            fields = _PERSON_SUMMARY_FIELDS[ds_key]
+            sections.append(format_results(rows, fields=fields, truncate_length=120))
+        else:
+            sections.append(format_results(rows))
+        sections.append("")
+
     header = f"Total: {total_found} resultados encontrados.\n\n"
-    return header + "\n".join(sections)
+    body = header + "\n".join(sections)
+
+    if use_summary and detalle == "auto":
+        body += (
+            "\nNota: Mostrando vista resumida por alto volumen de resultados. "
+            "Para ver todos los campos, usa detalle='completo'."
+        )
+
+    return body
 
 
 @mcp.tool()

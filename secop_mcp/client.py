@@ -157,7 +157,12 @@ async def query_dataset(
     return resp.json()
 
 
-def format_results(rows: list[dict[str, Any]], max_rows: int = 20) -> str:
+def format_results(
+    rows: list[dict[str, Any]],
+    max_rows: int = 20,
+    fields: list[str] | None = None,
+    truncate_length: int = 0,
+) -> str:
     """Formatea filas de resultados en texto legible para el LLM.
 
     Convierte la lista de diccionarios en un formato de texto plano
@@ -165,26 +170,14 @@ def format_results(rows: list[dict[str, Any]], max_rows: int = 20) -> str:
     Limita la cantidad de filas mostradas para evitar respuestas excesivas.
 
     Args:
-        rows:     Lista de filas (diccionarios) retornadas por query_dataset().
-        max_rows: Máximo de filas a incluir en el texto formateado.
-                  Las filas restantes se indican con un mensaje de paginación.
+        rows:            Lista de filas (diccionarios) retornadas por query_dataset().
+        max_rows:        Máximo de filas a incluir en el texto formateado.
+        fields:          Si se proporciona, solo muestra estos campos por fila.
+                         Los campos que no existan en una fila se ignoran.
+        truncate_length: Si > 0, trunca valores de texto a esta longitud.
 
     Returns:
-        Texto formateado con los resultados. Incluye conteo total,
-        detalle por fila y mensaje de paginación si hay más resultados.
-
-    Ejemplo de salida:
-        Mostrando 2 de 50 resultados:
-
-        --- Resultado 1 ---
-          nombre_entidad: Alcaldía de Bogotá
-          valor_del_contrato: 500000000
-          ...
-
-        --- Resultado 2 ---
-          ...
-
-        ... y 48 resultados más (usa 'offset' para paginar).
+        Texto formateado con los resultados.
     """
     if not rows:
         return "No se encontraron resultados."
@@ -195,14 +188,19 @@ def format_results(rows: list[dict[str, Any]], max_rows: int = 20) -> str:
 
     for i, row in enumerate(display, 1):
         lines.append(f"--- Resultado {i} ---")
-        for key, value in row.items():
-            if value is not None and str(value).strip():
-                if key in ("urlproceso", "ruta_proceso_en_secop_i"):
-                    url = _extract_url(value)
-                    if url:
-                        lines.append(f"  {key}: {url}")
-                else:
-                    lines.append(f"  {key}: {value}")
+        items = row.items() if fields is None else ((k, row.get(k)) for k in fields)
+        for key, value in items:
+            if value is None or not str(value).strip():
+                continue
+            if key in ("urlproceso", "ruta_proceso_en_secop_i"):
+                url = _extract_url(value)
+                if url:
+                    lines.append(f"  {key}: {url}")
+            else:
+                display_val = str(value)
+                if truncate_length > 0 and len(display_val) > truncate_length:
+                    display_val = display_val[: truncate_length - 3] + "..."
+                lines.append(f"  {key}: {display_val}")
         lines.append("")
 
     if total > max_rows:
